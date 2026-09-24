@@ -17,7 +17,7 @@
 
 ReAct interleaves language-model reasoning with actions that interact with an external environment \cite{yao2023react}. This note gives that interaction a minimal mathematical representation.
 
-The purpose is descriptive rather than algorithmic: we want to make precise the information available to the agent, the distinction between reasoning and external action, and the way environmental observations enter subsequent decisions. We do \emph{not} assume a particular reinforcement-learning algorithm, a separate routing policy, or a multi-agent architecture.
+The goal is descriptive rather than algorithmic. We want to make precise what information is available to the agent, how reasoning changes the agent's internal information state, how external actions interact with the environment, and how new observations enter subsequent decisions. We do \emph{not} assume a particular reinforcement-learning algorithm, a separate routing policy, or a multi-agent architecture.
 
 \section{Basic Setup}
 
@@ -62,20 +62,54 @@ where
     \item \(o_{k+1}\) is the observation returned after that action.
 \end{itemize}
 
-Thus, \(h_t\) contains all information available to the agent before it generates the next reasoning step. Initially,
+Thus, \(h_t\) contains the information accumulated by the agent before it generates the next reasoning step. Initially,
 \[
 h_0=(q).
 \]
 
-We use the full history instead of assuming a compact state representation in advance. If a sufficient representation is later identified, one may define
+We keep the full history rather than assuming a compact state representation in advance. This avoids imposing a Markov representation before a sufficient state has been identified.
+
+\section{Internal Environment and Embedded MDP View}
+
+To distinguish internal reasoning from interaction with the external environment, introduce an internal information state
 \[
-s_t=\phi(h_t)
+c_t\in\mathcal{C}.
 \]
-and work with \(s_t\). No such compression is required for the formulation below.
+We write
+\begin{equation}
+    c_t=\psi(h_t),
+    \label{eq:internal-state}
+\end{equation}
+where \(\psi\) represents the information from the interaction history that is available for the next computation.
+
+This notation is not meant to introduce an additional latent \emph{mental state} of the language model. In the minimal formulation, we simply take
+\begin{equation}
+    c_t=h_t.
+    \label{eq:internal-state-minimal}
+\end{equation}
+A more compact representation can be introduced later if one can identify a sufficient summary of the history.
+
+Let \(\mathcal{R}\) denote the space of reasoning steps. A reasoning step \(r_t\in\mathcal{R}\) acts on the internal state according to
+\begin{equation}
+    c_t^{+}
+    \sim
+    P_{\mathrm{int}}(\cdot\mid c_t,r_t),
+    \label{eq:internal-transition}
+\end{equation}
+where \(P_{\mathrm{int}}\) is the internal transition rule. In the minimal textual realization,
+\begin{equation}
+    c_t=h_t,
+    \qquad
+    c_t^{+}=h_t\oplus r_t,
+    \label{eq:internal-transition-minimal}
+\end{equation}
+with \(\oplus\) denoting concatenation.
+
+The important distinction is that this internal transition changes the information available to the agent without directly changing the external environment state \(x_t\). When \(c_t\) is sufficient for the internal transition dynamics, \((\mathcal{C},\mathcal{R},P_{\mathrm{int}})\) has the state--action--transition structure of an embedded MDP. We do not assign a separate intrinsic reward to this internal process; the usefulness of reasoning is evaluated through the downstream task reward of the complete ReAct trajectory.
 
 \section{One ReAct Round}
 
-A single ReAct round consists of reasoning, acting, observing, and updating the history.
+A single ReAct round couples one internal reasoning transition with one external interaction.
 
 \subsection{Reasoning}
 
@@ -87,7 +121,12 @@ Conditioned on the current history, the language model generates a reasoning ste
     \label{eq:reason}
 \end{equation}
 
-The reasoning \(r_t\) changes the textual context available to the model but does not, by itself, change the external environment state \(x_t\).
+The reasoning step updates the internal state according to \eqref{eq:internal-transition}, while the external state remains unchanged:
+\[
+(c_t,x_t)
+\;\xrightarrow{\;r_t\;}\;
+(c_t^{+},x_t).
+\]
 
 \subsection{External action}
 
@@ -108,18 +147,35 @@ The notation \(\pi^{\mathrm{R}}_{\theta}\) and \(\pi^{\mathrm{A}}_{\theta}\) doe
     \label{eq:factorization}
 \end{equation}
 
-\subsection{Observation and update}
-
-After \(a_t\) is executed, the environment evolves according to \eqref{eq:transition}--\eqref{eq:observation}. The returned observation is appended to the context:
+After \(a_t\) is executed, the external environment evolves according to \eqref{eq:transition}--\eqref{eq:observation}. The returned observation is then incorporated into the history:
 \begin{equation}
     h_{t+1}
     =
     h_t\oplus(r_t,a_t,o_{t+1}),
     \label{eq:update}
 \end{equation}
-where \(\oplus\) denotes concatenation.
+and the next internal state is
+\begin{equation}
+    c_{t+1}
+    =
+    \psi(h_{t+1}).
+    \label{eq:next-internal-state}
+\end{equation}
 
-The resulting loop is
+Under the minimal choice \(c_t=h_t\), this reduces exactly to the original history update.
+
+The complete round can therefore be summarized as
+\[
+\boxed{
+(c_t,x_t)
+\;\xrightarrow{\;r_t\;}\;
+(c_t^{+},x_t)
+\;\xrightarrow{\;a_t,\;o_{t+1}\;}\;
+(c_{t+1},x_{t+1}).
+}
+\]
+
+Equivalently, at the level of the observable interaction,
 \[
 \boxed{
 h_t
@@ -134,7 +190,7 @@ h_{t+1}.
 }
 \]
 
-This is the basic mathematical structure of ReAct used in this note.
+The second display is the basic ReAct loop; the first makes explicit the different roles of internal reasoning and external interaction.
 
 \section{Termination and Task Objective}
 
@@ -173,26 +229,42 @@ Equation \eqref{eq:objective} does \emph{not} imply that ReAct must be trained w
 
 \section{Sequential-Decision Interpretation}
 
-The formulation separates two roles:
-\begin{align*}
-    r_t &: \text{internal computation that changes the agent's context},\\
-    a_t &: \text{external interaction that changes or queries the environment}.
-\end{align*}
-
-The agent's next decision is history-dependent because previous reasoning, actions, and observations may all affect what should happen next. Formally, one may regard the full history \(h_t\) as an augmented state if a Markov representation is desired. However, no Markov assumption on the latest observation alone is needed.
-
-The key structural point is therefore simple:
+The formulation distinguishes two coupled state spaces:
 \[
-\boxed{
-\text{ReAct is a sequential interaction between internal reasoning and external action.}
-}
+x_t\in\mathcal{X}
+\qquad\text{and}\qquad
+c_t\in\mathcal{C}.
 \]
+The external state \(x_t\) describes the environment with which the agent interacts, while the internal state \(c_t\) describes the information currently available to the agent for computation.
+
+Reasoning and acting affect these states differently:
+\begin{align*}
+    r_t &: \text{acts primarily on the internal state } c_t,\\
+    a_t &: \text{acts on or queries the external state } x_t.
+\end{align*}
+The resulting observation then carries information from the external environment back into the next internal state.
+
+This gives the following coupled process:
+\[
+\text{internal computation}
+\;\longrightarrow\;
+\text{external interaction}
+\;\longrightarrow\;
+\text{new observation}
+\;\longrightarrow\;
+\text{internal computation}.
+\]
+
+If the pair \((c_t,x_t)\) is sufficient for the corresponding transition dynamics, the full process admits a Markov representation on the joint state space. When \(x_t\) is latent, the same interaction is naturally partially observed from the agent's perspective.
+
+For the minimal formulation in this note, however, no compact Markov state needs to be identified. Taking \(c_t=h_t\) preserves the original history-dependent description exactly. The internal MDP view is therefore best understood as an embedded component of the full ReAct interaction, not as an independent decision problem.
 
 \section{Boundary of the Present Formulation}
 
 This note intentionally stops at the single-agent ReAct interaction above. In particular, it does not yet introduce
 \begin{itemize}
     \item a separate high-level controller deciding when to reason or act,
+    \item a separate intrinsic reward for internal reasoning,
     \item an explicit cost for tokens, tool calls, or latency,
     \item a multi-agent communication or delegation mechanism, or
     \item a particular learning algorithm.
